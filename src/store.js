@@ -126,7 +126,7 @@ export const SOURCES = ['explicit', 'observed', 'inferred', 'confirmed', 'correc
  */
 export function rememberKey(
   cwd,
-  { key, text, weight = 1, at = Date.now(), source = 'explicit', supersedes },
+  { key, text, weight = 1, at = Date.now(), source = 'explicit', supersedes, evidence = 1 },
   env,
 ) {
   const file = p(seaDir(cwd, env), 'manual.jsonl');
@@ -137,7 +137,7 @@ export function rememberKey(
     const prior = readJsonl(file).filter((r) => r.key === key);
     if (prior.length) prevAt = prior[prior.length - 1].at;
   }
-  const row = { key, text, weight, at, source: src };
+  const row = { key, text, weight, at, source: src, evidence };
   if (prevAt !== undefined) row.supersedes = prevAt;
   appendJsonl(file, row);
   return row;

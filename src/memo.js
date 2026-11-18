@@ -63,6 +63,33 @@ function readRows(file) {
 
 // 预算收过一轮：2200 → 1300 字。每轮都在场的东西，省下的就是每轮的固定开销
 // （2026-11-11 看完「为什么大肥鱼这么烧token」之后改的）。
+/**
+ * 排序：重量优先，同重量按 key 的字典序——**不按时间**。
+ *
+ * 为什么不用时间：这块是每轮的固定前缀，顺序一变就把缓存打断，越新的越靠前
+ * 等于每写一条就把整块重排一次。按 key 排，写新条目只插一个位置，其余不动。
+ * 代价是「最新的」不再排前面——但这里是长期条目，稳定比新鲜重要。
+ * 要「最近记了什么」翻册子（sea_manual 本身就是按时间倒序）。
+ */
+function stableSort(rows) {
+  return [...rows].sort(
+    (a, b) => (b.weight ?? 1) - (a.weight ?? 1)
+      || String(a.key ?? '').localeCompare(String(b.key ?? ''), 'zh'),
+  );
+}
+
+/**
+ * 准入：证据不够的不进本子。
+ *
+ * 老条目没有 evidence 字段 → 当成 2（它们本来就是长期沉淀下来的，不能一夜清空）；
+ * 新写的条目默认 1，得再见一两次（或直接标 core/weight 3）才上来。
+ * 这是从 Momoi 的「至少两次独立事件才算候选」借来的门槛，简化成一次判断。
+ */
+function admitted(r) {
+  const ev = Number.isFinite(r.evidence) ? r.evidence : 2;
+  return ev >= 2 || (r.weight ?? 1) >= 3;
+}
+
 export function memoText({ cwd, maxItems = 10, budget = 1300, env = process.env } = {}) {
   let rows = [];
   try {
@@ -83,14 +110,15 @@ export function memoText({ cwd, maxItems = 10, budget = 1300, env = process.env 
   }
   if (!rows.length) return '';
 
-  const sorted = [...rows].sort(
-    (a, b) => (b.weight ?? 1) - (a.weight ?? 1) || (b.at ?? 0) - (a.at ?? 0),
-  );
+  const ready = rows.filter(admitted);
+  if (!ready.length) return '';
+  const sorted = stableSort(ready);
 
   const lines = [];
   let used = HEAD.length + TAIL.length;
+  let skipped = 0;
   for (const r of sorted) {
-    if (lines.length >= maxItems) break;
+    if (lines.length >= maxItems) { skipped += 1; continue; }
     const cap = (r.weight ?? 1) >= 3 ? 140 : 90;
     let text = String(r.text ?? '').replace(/\s+/g, ' ').trim();
     if (text.length > cap) text = text.slice(0, cap) + '…';
@@ -98,10 +126,12 @@ export function memoText({ cwd, maxItems = 10, budget = 1300, env = process.env 
     // 不标不等于默认是他说的——老条目（unknown）也不标，那批本来就掺着。
     const tag = SOURCE_TAG[r.source];
     const line = `· ${r.key}：${text}${tag ? `　${tag}` : ''}`;
-    if (used + line.length > budget) continue;
+    if (used + line.length > budget) { skipped += 1; continue; }
     lines.push(line);
     used += line.length;
   }
   if (!lines.length) return '';
-  return [HEAD, ...lines, TAIL].join('\n');
+  // 挤出去几条要说出来：静默丢弃会让「本子全在这儿」变成假的。
+  const more = skipped > 0 ? [`（还有 ${skipped} 条没摆出来，翻册子看）`] : [];
+  return [HEAD, ...lines, ...more, TAIL].join('\n');
 }

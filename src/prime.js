@@ -49,6 +49,17 @@ function hash(str) {
   return (h >>> 0) / 4294967295;
 }
 
+/**
+ * 中文不切词也能比「像不像」：取相邻两字的组合。
+ * 「去江边吃烤红薯」→ {'去江','江边','边吃','吃烤','烤红','红薯'}
+ */
+function bigrams(s) {
+  const t = String(s ?? '').replace(/[\s，。、！？；：""''（）()《》〈〉…—\-·,.!?;:'"]/g, '');
+  const out = new Set();
+  for (let i = 0; i < t.length - 1; i += 1) out.add(t.slice(i, i + 2));
+  return out;
+}
+
 function loadAllEpisodes(env) {
   const root = seaRoot(env);
   if (!fs.existsSync(root)) return [];
@@ -113,12 +124,31 @@ export function buildPrimeText({ env = process.env, limit = 3, minWeight = 0.55,
   // 只在会话自己的工作区里挑；拿不到 cwd（或那个工作区还没建索引）才退回全部。
   const onlyKey = cwd ? String(cwd).replace(/[:]/g, '').replace(/[\\/]/g, '-') : null;
   const now = Date.now()
-  const eligible = (minW) => loadAllEpisodes(env)
-    .filter((ep) => (onlyKey ? ep.ws === onlyKey : true))
+  const all = loadAllEpisodes(env).filter((ep) => (onlyKey ? ep.ws === onlyKey : true));
+
+  // 2026-11-18：让「忽然浮起来」沾一点**当前话题**。
+  // 注入点拿不到这轮用户说了什么（`text()` 是同步的、在拼 prompt 之前被调用），
+  // 所以退一步用「最近 8 条」的摘要当作「现在在聊什么」的近似。
+  // 匹配只做加分、不做过滤——全按话题挑就不是「忽然」了，只剩检索。
+  const recent = all
+    .slice()
+    .sort((a, b) => (b.endTs ?? b.startTs ?? 0) - (a.endTs ?? a.startTs ?? 0))
+    .slice(0, 8);
+  const recentGrams = new Set();
+  for (const ep of recent) for (const g of bigrams(ep.head)) recentGrams.add(g);
+  const affinity = (ep) => {
+    let hit = 0;
+    for (const g of bigrams(ep.head)) if (recentGrams.has(g)) hit += 1;
+    return hit;
+  };
+  // 日期种子保证同一天稳定；affinity 最多把排序提前 0.45，压不过「重量」那条线。
+  const score = (ep) => hash(`${today}|${ep.ws}#${ep.id}`) - Math.min(0.45, affinity(ep) * 0.05);
+
+  const eligible = (minW) => all
     .filter((ep) => effectiveWeight(ep, now, cwd, env) >= minW)
     .filter((ep) => !seen.has(`${ep.ws}#${ep.id}`))
-    // 按「日期种子 + 片段身份」排序：同一天稳定，第二天换一批
-    .sort((a, b) => hash(`${today}|${a.ws}#${a.id}`) - hash(`${today}|${b.ws}#${b.id}`));
+    // 按「日期种子 + 片段身份」排序：同一天稳定，第二天换一批；沾话题的提前
+    .sort((a, b) => score(a) - score(b));
 
   let pool = eligible(minWeight);
   // 一天里浮着浮着会浮完（实测：正常玩一上午就能把够重的段全浮一遍）。

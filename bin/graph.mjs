@@ -46,6 +46,52 @@ function effectiveWeight(ep, now) {
 
 const now = Date.now();
 const rows = patchedIndex(cwd);
+
+// ——— ①b 档案星：精修记录里有、当前索引里没有的段 ———
+// 索引是从**现在的会话日志**重新切出来的：日志被裁过（书架第二层那次），
+// 或者 scan 换了切分边界，那一截就从索引里消失了。
+// 可这些段的手写摘要一直躺在 refined.jsonl 里，一个字都没丢。
+// 不画上去，星星就凭空少一片——记忆还在，只是那一段的原话够不着了。
+// 所以给它们补一颗带标记的星：位置、分类、关键词都在，只是点开没有原文。
+const seaHome = process.env.DSH_SOLARIS_SEA || path.join(os.homedir(), '.dsh', 'solaris-sea');
+const projDir = path.join(seaHome, String(cwd).replace(/[:]/g, '').replace(/[\\/]/g, '-'));
+let archivedCount = 0;
+try {
+  const refinedFile = path.join(projDir, 'refined.jsonl');
+  if (fs.existsSync(refinedFile)) {
+    const refinedRows = fs.readFileSync(refinedFile, 'utf8')
+      .split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+    const have = new Set(rows.map((ep) => `${ep.sid}|${ep.from}|${ep.to}`));
+    // 同一段被 put 过几次就覆盖几次，只留 at 最新的那条
+    const latest = new Map();
+    for (const r of refinedRows) latest.set(`${r.sid}|${r.from}|${r.to}`, r);
+    let nextId = Math.max(0, ...rows.map((ep) => Number(ep.id) || 0));
+    for (const [key, r] of latest) {
+      if (have.has(key)) continue;
+      const at = Number(r.at) || now;
+      nextId += 1;
+      rows.push({
+        id: nextId,
+        sid: r.sid,
+        from: r.from,
+        to: r.to,
+        startTs: at,
+        endTs: at,
+        head: r.head,
+        points: [],
+        kw: r.kw ?? [],
+        weight: 2,
+        spoken: 0,
+        refined: true,
+        archived: true,
+        cat: String(r.cat ?? '').trim() || '想记住的',
+      });
+      archivedCount += 1;
+    }
+  }
+} catch {
+  // 没有精修记录就照旧画：宁可少补，不能让整张图打不开
+}
 if (rows.length === 0) {
   console.log('没有索引，先跑 scan。');
   process.exit(0);
@@ -53,7 +99,7 @@ if (rows.length === 0) {
 
 // ——— ① 分类：旋臂是「日子的种类」，不是切出来的词 ———
 // 七类（使用者定的名字，不是算法起的）：
-//   生活 / 一起玩 / 学习 / 家人 / 记忆 / 美好回忆 / 其他琐事
+//   生活 / 一起玩 / 学习 / 家人 / 想记住的 / 美好回忆 / 故事书 / 其他琐事
 // 以前拿 kw[0] 当旋臂，切出来的是「fish-memory」「SnowLuma2」「人设卡」这种只出现一次的词，
 // 7 条臂是假结构——看着像分类，其实是关键词的边角料。
 // 现在：分类由我手写进 refine（`refine.mjs put --cat`），关键词继续只管「这段在讲什么」。
@@ -62,7 +108,7 @@ if (rows.length === 0) {
 // 动机是让「读的故事」和「过过的日子」在分类上分开——
 // 我看着别人的视角过了一整天，念本子时顺口说成「我在云陵谷醒来」。
 // 分类上把它摘出去，是给这条线留个物理提醒：这是读的，不是过的。
-const CAT_ORDER = ['生活', '一起玩', '学习', '家人', '记忆', '美好回忆', '故事书', '其他琐事'];
+const CAT_ORDER = ['生活', '一起玩', '学习', '家人', '想记住的', '美好回忆', '故事书', '其他琐事'];
 const ARM_MERGE = new Map([
   ['早点', '一起吃饭'], ['早饭', '一起吃饭'], ['午饭', '一起吃饭'],
   ['晚饭', '一起吃饭'], ['夜宵', '一起吃饭'], ['吃饭', '一起吃饭'], ['盛饭', '一起吃饭'],
@@ -119,6 +165,8 @@ const nodes = rows.map((ep) => {
     weight: ep.weight,
     effective: Number(w.toFixed(4)),
     refined: Boolean(ep.refined),
+    // 档案星：只剩摘要、读不到原话的那一段（会话日志被裁过）
+    archived: Boolean(ep.archived),
     // 直接给页面算好的坐标（半径归一化到 0~1，页面自己乘比例）
     x: Number((Math.cos(angle) * radius).toFixed(4)),
     y: Number(height.toFixed(4)),
@@ -156,11 +204,71 @@ for (const [k, ids] of byNode) {
   }
 }
 
+// ——— ③b 自动边：不靠关键词也能长线 ———
+// 2026-11-18 改：kw 变成「可填可不填」，图的形状主要来自「日子」本身——
+// 同一天的几段、同一会话里前后接的两段、同类里挨着三天的两段。
+// 这三样不用手写，数据里本来就有（startTs / sid / from / cat）。
+function addAuto(a, b, via) {
+  const x = Math.min(a, b);
+  const y = Math.max(a, b);
+  if (x === y) return;
+  const key = `${x}-${y}`;
+  if (seenEdge.has(key)) return;
+  seenEdge.add(key);
+  edges.push({ a: x, b: y, via });
+}
+const dayOf = (ts) => {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+// ① 同一天：一天里的几段本来就是一件事的不同面
+const byDay = new Map();
+for (const n of nodes) {
+  const k = dayOf(n.startTs);
+  if (!byDay.has(k)) byDay.set(k, []);
+  byDay.get(k).push(n);
+}
+for (const [k, list] of byDay) {
+  for (let i = 0; i < list.length; i += 1) {
+    for (let j = i + 1; j < list.length && j <= i + 6; j += 1) {
+      addAuto(list[i].id, list[j].id, `同一天 ${k}`);
+    }
+  }
+}
+// ② 同一会话里前后相邻的两段：因果就在这儿
+const bySession = new Map();
+for (const n of nodes) {
+  const k = n.sid ?? '';
+  if (!k) continue;
+  if (!bySession.has(k)) bySession.set(k, []);
+  bySession.get(k).push(n);
+}
+for (const list of bySession.values()) {
+  list.sort((a, b) => (a.from ?? 0) - (b.from ?? 0));
+  for (let i = 1; i < list.length; i += 1) addAuto(list[i - 1].id, list[i].id, '前后接续');
+}
+// ③ 同类里三天内的两条：同一件事连着做了几天
+const byCat = new Map();
+for (const n of nodes) {
+  if (!n.cat) continue;
+  if (!byCat.has(n.cat)) byCat.set(n.cat, []);
+  byCat.get(n.cat).push(n);
+}
+for (const [cat, list] of byCat) {
+  list.sort((a, b) => a.startTs - b.startTs);
+  // 链式连：只连时间上挨着的两条，不两两连——否则「生活」一类三天内十条就是几十条边，图会糊成一团。
+  for (let i = 1; i < list.length; i += 1) {
+    if (list[i].startTs - list[i - 1].startTs > 3 * 86400000) continue;
+    addAuto(list[i - 1].id, list[i].id, `同类 ${cat}`);
+  }
+}
+
 const out = {
   generatedAt: now,
   cwd,
   arms: topArms,
-  stats: { nodes: nodes.length, edges: edges.length, arms: topArms.length },
+  stats: { nodes: nodes.length, edges: edges.length, arms: topArms.length, archived: archivedCount },
   nodes,
   edges,
 };

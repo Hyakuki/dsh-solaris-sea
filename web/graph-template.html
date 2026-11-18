@@ -557,6 +557,16 @@ function drawNodes() {
     const d = Math.max(1.1, 2.2 * p.f * zk);
     ctx.fillRect(p.x - d / 2, p.y - d / 2, d, d);
 
+    // 档案星：那一段的原话已经读不到了（会话日志被裁过），只剩摘要。
+    // 画一圈虚线，别让它们冒充还能点开原文的星。
+    if (n.archived) {
+      ctx.strokeStyle = `rgba(190,215,255,${clamp(0.16 + bright * 0.24, 0, 0.46)})`;
+      ctx.lineWidth = 0.7;
+      ctx.setLineDash([1.6, 2.2]);
+      ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2.6, size * 0.44), 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
     if (n.id === selected) {
       ctx.strokeStyle = 'rgba(235,245,255,.85)';
       ctx.lineWidth = 1.2;
@@ -708,7 +718,7 @@ function select(id) {
   document.getElementById('p-head').textContent = n.head;
   document.getElementById('p-meta').innerHTML =
     `<span>${fmtTime(n.startTs)}</span>` +
-    `<span>重量 ${n.weight ?? '—'}${n.refined ? ' · 手写' : ''}</span>`;
+    `<span>重量 ${n.weight ?? '—'}${n.refined ? ' · 手写' : ''}${n.archived ? ' · 档案（原话已不在）' : ''}</span>`;
 
   const kw = document.getElementById('p-kw');
   kw.innerHTML = (n.kw || []).slice(0, 8).map((k) => `<span>${escapeHtml(k)}</span>`).join('');

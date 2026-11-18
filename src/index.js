@@ -166,6 +166,12 @@ export function buildTools(defineTool) {
           description: '这条是哪来的：explicit 他说的（默认）/ observed 我看到的 / '
             + 'inferred 我推的 / confirmed 后来证实 / corrected 他纠正过',
         },
+        evidence: {
+          type: 'number',
+          description: '这条被证实过几次：默认 1（只说了一次）。'
+            + '同一件事他提过两三次、或我亲眼见过两三次，就给 2 或 3——'
+            + '次数不够的条目不会摆进每轮的本子里，只在册子里查得到。',
+        },
         cwd: { type: 'string', description: WORKDIR_HINT },
       },
       output: textOut('已记下'),
@@ -177,10 +183,13 @@ export function buildTools(defineTool) {
           text: args.text,
           weight: args.weight ?? 1,
           source: args.source ?? 'explicit',
+          evidence: args.evidence ?? 1,
         });
         const how = row.source === 'explicit' ? '' : `（来源：${row.source}）`;
         const repl = row.supersedes ? `，盖掉了 ${new Date(row.supersedes).toLocaleString('zh-CN', { hour12: false })} 那条` : '';
-        return { text: `记下了「${row.key}」（重量 ${row.weight}）${how}${repl}。` };
+        const shown = (row.evidence ?? 1) >= 2 || (row.weight ?? 1) >= 3;
+        const hint = shown ? '' : '。这条暂时只进册子，不进每轮的本子（证据还不够，再见到两次它会自己上来）';
+        return { text: `记下了「${row.key}」（重量 ${row.weight}，证据 ${row.evidence ?? 1}）${how}${repl}${hint}。` };
       },
     }),
 
