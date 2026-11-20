@@ -7,7 +7,7 @@
 /** 一段一条：摘要/要点/原话/关键词/指针。 */
 export function oneEpisode(ep) {
   return [
-    `#${ep.id} ${ep.when} 重量 ${ep.weight}${ep.rawHit ? `　〔原话命中：${ep.matched}〕` : ''}`,
+    `#${ep.id} ${ep.when} 重量 ${ep.weight}${ep.rawHit ? `　〔原话命中：${ep.matched}〕` : ''}${ep.match === 'weak' ? '　〔弱匹配：只沾边，别当原话用〕' : ''}`,
     `  摘要：${ep.head}`,
     ep.points?.length ? `  要点：${ep.points.join(' / ')}` : '',
     (ep.rawLines ?? []).map((l) => `  原话：${l}`).join('\n'),

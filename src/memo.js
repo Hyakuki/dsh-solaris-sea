@@ -90,7 +90,37 @@ function admitted(r) {
   return ev >= 2 || (r.weight ?? 1) >= 3;
 }
 
-export function memoText({ cwd, maxItems = 10, budget = 1300, env = process.env } = {}) {
+/**
+ * 五层分类（2026-11-20 凌晨和月定的）：每层回答的是「这条记忆在什么场合该被读」。
+ *
+ *   identity  每轮必读，一条不能少（我是谁、怎么和他相处）
+ *   life      常读，日子怎么过（口味、习惯、约定）
+ *   event     挑着读——只读打过钉子的（有分量的那几天），流水账不读
+ *   knowledge 不读，干活要查时才翻（sea_manual）
+ *   story     不读，看番的时候另算
+ *
+ * 超预算的时候先砍 event，identity 永远过线——但 identity 自己也有个硬上限
+ * （IDENTITY_CAP），涨到那个数就说明有东西该往 life 挪了，别让它无限膨胀。
+ * 砍掉不等于丢：全在 manual.jsonl 里，sea_manual / sea_recall 都查得到。
+ */
+// 五个层都必须在这儿登记：layerOf 用 `l in LAYER_RANK` 判断「这条标过层没有」，
+// 少登一个（当初漏了 knowledge / story），它就会掉进重量兜底、被当成身份层摆出来。
+const LAYER_RANK = { identity: 0, life: 1, event: 2, knowledge: 3, story: 3 };
+// 身份层的「提醒线」，不是砍的开关：超了照样全摆，只在末尾提一句让我去挪。
+// 砍身份层＝丢人格，比多花几个 token 严重得多。
+const IDENTITY_CAP = 3000;
+const EVENT_PIN_MAX = 4;    // 事件层最多摆几条「钉子」
+
+/** 没标层的老条目：分量重的当身份，其余当生活——宁可多摆一条，也别静默丢掉。 */
+function layerOf(r) {
+  const l = String(r.layer || '');
+  if (l in LAYER_RANK) return l;
+  return (r.weight ?? 1) >= 3 ? 'identity' : 'life';
+}
+
+// budget：身份层全摆要 ~3100 字，生活层全摆要 ~1700 字，事件层只放 4 条钉子 ~560 字。
+// 3200 只够身份层，生活层会被整层挤空——那样分层就白做了。4900 是三层的实际和。
+export function memoText({ cwd, maxItems = 60, budget = 4900, env = process.env } = {}) {
   let rows = [];
   try {
     rows = cwd ? loadManual(cwd, env) : [];
@@ -112,13 +142,29 @@ export function memoText({ cwd, maxItems = 10, budget = 1300, env = process.env 
 
   const ready = rows.filter(admitted);
   if (!ready.length) return '';
-  const sorted = stableSort(ready);
+  // 先按层、再按重量：身份层排最前，保证「一条不能少」的那批先占位。
+  // 同层内仍按 weight + key 字典序——不按时间，理由见 stableSort。
+  const sorted = [...ready].sort(
+    (a, b) => (LAYER_RANK[layerOf(a)] ?? 9) - (LAYER_RANK[layerOf(b)] ?? 9)
+      || (b.weight ?? 1) - (a.weight ?? 1)
+      || String(a.key ?? '').localeCompare(String(b.key ?? ''), 'zh'),
+  );
 
   const lines = [];
   let used = HEAD.length + TAIL.length;
-  let skipped = 0;
+  let identityChars = 0;
+  let pins = 0;
+  const cut = { identity: 0, life: 0, event: 0 };
+
   for (const r of sorted) {
-    if (lines.length >= maxItems) { skipped += 1; continue; }
+    const layer = layerOf(r);
+    // 知识层、故事书不读：干活要查时翻册子，看番另算
+    if (layer === 'knowledge' || layer === 'story') continue;
+    // 事件层只读打过钉子的（重量 3 的那几天），流水账不读
+    if (layer === 'event' && ((r.weight ?? 1) < 3 || pins >= EVENT_PIN_MAX)) {
+      cut.event += 1;
+      continue;
+    }
     const cap = (r.weight ?? 1) >= 3 ? 140 : 90;
     let text = String(r.text ?? '').replace(/\s+/g, ' ').trim();
     if (text.length > cap) text = text.slice(0, cap) + '…';
@@ -126,12 +172,28 @@ export function memoText({ cwd, maxItems = 10, budget = 1300, env = process.env 
     // 不标不等于默认是他说的——老条目（unknown）也不标，那批本来就掺着。
     const tag = SOURCE_TAG[r.source];
     const line = `· ${r.key}：${text}${tag ? `　${tag}` : ''}`;
-    if (used + line.length > budget) { skipped += 1; continue; }
+    // 条数和总预算
+    if (lines.length >= maxItems) { cut[layer] += 1; continue; }
+    if (used + line.length > budget) { cut[layer] += 1; continue; }
     lines.push(line);
     used += line.length;
+    if (layer === 'identity') identityChars += line.length;
+    if (layer === 'event') pins += 1;
   }
   if (!lines.length) return '';
-  // 挤出去几条要说出来：静默丢弃会让「本子全在这儿」变成假的。
-  const more = skipped > 0 ? [`（还有 ${skipped} 条没摆出来，翻册子看）`] : [];
+
+  // 挤出去几条要说出来（按层分）：静默丢弃会让「本子全在这儿」变成假的。
+  const cutTotal = cut.identity + cut.life + cut.event;
+  const detail = [
+    cut.identity ? `身份 ${cut.identity}` : '',
+    cut.life ? `生活 ${cut.life}` : '',
+    cut.event ? `事件 ${cut.event}` : '',
+  ].filter(Boolean).join(' · ');
+  const more = [];
+  if (cutTotal > 0) more.push(`（还有 ${cutTotal} 条没摆出来：${detail}；翻册子看）`);
+  // 身份层涨过提醒线：照样摆着，但要提我一句该挪了——不许它无限膨胀。
+  if (identityChars > IDENTITY_CAP) {
+    more.push(`（身份层 ${identityChars} 字，过了 ${IDENTITY_CAP} 的提醒线，该挪一条下去）`);
+  }
   return [HEAD, ...lines, ...more, TAIL].join('\n');
 }

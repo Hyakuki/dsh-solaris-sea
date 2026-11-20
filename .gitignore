@@ -3,3 +3,8 @@ tmp/
 *.log
 *.bak
 DESIGN.md
+
+# 一次性产物：自检/清单的临时输出，不进仓库
+audit-out.txt
+readday-out.txt
+清单-23段.md

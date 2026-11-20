@@ -528,6 +528,12 @@ function drawEdges() {
   }
 }
 
+// 五层色调（由 bin/graph.mjs 按分类反推、随每个节点一起送过来）：
+// 身份层最亮——这些是每轮都要读的东西，图上该一眼看见；
+// 知识层最暗——平时用不上，真要用时去册子里翻；
+// 事件/故事居中。只调亮度，不改颜色：颜色仍然归分类（旋臂）。
+const LAYER_TONE = { identity: 1.18, life: 1.0, event: 0.92, story: 0.8, knowledge: 0.66 };
+
 function drawNodes() {
   // 远的先画
   const list = [...DATA.nodes].sort((p, q) => (pts.get(q.id)?.z ?? 0) - (pts.get(p.id)?.z ?? 0));
@@ -538,7 +544,7 @@ function drawNodes() {
     // 时间窗内的星才亮；窗外的不是删掉，是暗成一颗底子（still there，只是今晚不看它）
     const inWin = inWindow(n.startTs) ? 1 : 0.06;
     const dim = (focusArm != null && ci !== focusArm ? 0.16 : 1) * inWin;
-    const bright = n.bright * dim * (0.55 + 0.45 * p.f);
+    const bright = n.bright * dim * (0.55 + 0.45 * p.f) * (LAYER_TONE[n.tier] ?? 1);
     const zk = clamp(0.78 + 0.22 * view.zoom, 0.8, 1.7);
     const size = (11 + 21 * n.size) * p.f * zk;
 
@@ -565,6 +571,15 @@ function drawNodes() {
       ctx.setLineDash([1.6, 2.2]);
       ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2.6, size * 0.44), 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]);
+    }
+
+    // 身份层：外面镶一道细金环，紧贴光晕内侧、比星星本身大一圈。
+    // 试过用径向渐变做柔光，结果成了一团糊住星核的光——星星看不见了，所以退回描边。
+    // 和档案星的虚线分开：有虚线＝这段原话读不到了；有金环＝这段属于「我是谁」那一层。
+    if (n.tier === 'identity') {
+      ctx.strokeStyle = `rgba(255,232,186,${clamp(0.18 + bright * 0.24, 0, 0.44)})`;
+      ctx.lineWidth = 0.9;
+      ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2.2, size * 0.48), 0, Math.PI * 2); ctx.stroke();
     }
 
     if (n.id === selected) {

@@ -29,9 +29,10 @@ if (dayFlag >= 0) { day = rest[dayFlag + 1]; rest.splice(dayFlag, 2); }
 function printEpisodes(rows) {
   if (rows.length === 0) { console.log('（没找到）'); return; }
   for (const ep of rows) {
-    console.log(`#${ep.id}  ${ep.when}  w=${ep.weight}  [${ep.sid.slice(0, 18)} · seq ${ep.from}-${ep.to}]`);
+    console.log(`#${ep.id}  ${ep.when}  w=${ep.weight}  [${ep.sid.slice(0, 18)} · seq ${ep.from}-${ep.to}]${ep.match === 'weak' ? '  〔弱匹配〕' : ''}${ep.rawHit ? `  〔原话命中：${ep.matched}〕` : ''}`);
     console.log(`    ${ep.head}`);
     if (ep.points?.length) console.log(`    要点：${ep.points.join(' / ')}`);
+    for (const line of ep.rawLines ?? []) console.log(`    原话：${line}`);
     if (ep.kw?.length) console.log(`    关键词：${ep.kw.join(' ')}`);
   }
 }

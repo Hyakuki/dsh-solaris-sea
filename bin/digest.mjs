@@ -1,10 +1,10 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 // 把索引摊开成「一段一块」的样子，给人看、也给我自己写摘要时看。
 // 用法：
 //   node bin/digest.mjs --cwd <工作区> [--day 2026-11-06] [--from 2026-11-01 --to 2026-11-05] [--only todo] [--limit 20]
 // 只用读，不改任何东西。
 
-import { patchedIndex } from '../src/refresh.js?v=5';
+import { patchedIndex } from '../src/refresh.js?v=6';
 
 function parseArgs(argv) {
   const out = {};

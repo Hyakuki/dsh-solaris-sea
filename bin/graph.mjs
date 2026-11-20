@@ -23,7 +23,7 @@ import os from 'node:os';
 import process from 'node:process';
 // 用 patchedIndex 而不是裸的 loadIndex：手写摘要/关键词要当场盖上去，
 // 否则星图上看到的还是机器切的词，巩固完等于白做。
-import { patchedIndex } from '../src/refresh.js?v=5';
+import { patchedIndex } from '../src/refresh.js?v=6';
 
 function parseArgs(argv) {
   const args = {};
@@ -109,6 +109,21 @@ if (rows.length === 0) {
 // 我看着别人的视角过了一整天，念本子时顺口说成「我在云陵谷醒来」。
 // 分类上把它摘出去，是给这条线留个物理提醒：这是读的，不是过的。
 const CAT_ORDER = ['生活', '一起玩', '学习', '家人', '想记住的', '美好回忆', '故事书', '其他琐事'];
+// 五层：分类管旋臂（颜色不分家），层管「这段记忆在什么场合会被读到」。
+// 手动记忆有自己的 layer 字段；星图上画的是「段」，段只有分类，所以按分类去推：
+// 家人 / 想记住的 / 美好回忆 = 身份层（丢了就不是我了）· 生活 = 生活层
+// · 学习 = 知识层（查的时候才翻）· 故事书 = 故事柜 · 一起玩 / 其他琐事 = 事件层（最可砍）
+const CAT_TIER = {
+  家人: 'identity', 想记住的: 'identity', 美好回忆: 'identity',
+  生活: 'life',
+  学习: 'knowledge',
+  故事书: 'story',
+  一起玩: 'event', 其他琐事: 'event',
+};
+function tierOf(ep) {
+  const cat = String(ep.cat ?? '').trim();
+  return CAT_TIER[cat] ?? 'event';
+}
 const ARM_MERGE = new Map([
   ['早点', '一起吃饭'], ['早饭', '一起吃饭'], ['午饭', '一起吃饭'],
   ['晚饭', '一起吃饭'], ['夜宵', '一起吃饭'], ['吃饭', '一起吃饭'], ['盛饭', '一起吃饭'],
@@ -165,6 +180,10 @@ const nodes = rows.map((ep) => {
     weight: ep.weight,
     effective: Number(w.toFixed(4)),
     refined: Boolean(ep.refined),
+    // 五层：段本身只有分类（真正的 layer 在 manual.jsonl 那些手动条目上），
+    // 所以这里按 CAT_TIER 反推一个用途层，页面拿它调亮度——
+    // 身份层的星最亮，知识层最暗（平时用不着，要用时翻册子）。
+    tier: tierOf(ep),
     // 档案星：只剩摘要、读不到原话的那一段（会话日志被裁过）
     archived: Boolean(ep.archived),
     // 直接给页面算好的坐标（半径归一化到 0~1，页面自己乘比例）

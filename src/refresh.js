@@ -77,9 +77,31 @@ function loadRefined(dir, env) {
   return map;
 }
 
-/** 先按精确的 sid#from#to 找，找不到再按 sid#from 兜底。 */
+/**
+ * 先按精确的 sid#from#to 找，找不到再按 sid#from 兜底，
+ * 最后按**时间**兜底（2026-11-19 补）。
+ *
+ * 为什么要有时间兜底：`from/to` 是会话日志里的记录序号，而**上下文压缩会替换掉
+ * 日志里被折叠的那一段**——序号整个往后缩，一条会话压一次，所有 seq 全漂。
+ * 11-19 梳理老会话时才发现：181 条手写摘要里有 58 条挂空（seq 指向的位置已经不存在）。
+ * 消息上的时间戳不会被压缩改写，所以时间是最稳的锚。
+ *
+ * 只在 seq 全对不上时才用，且差超过 90 秒就不认（免得挂到隔壁那段头上）。
+ */
+const TS_TOLERANCE_MS = 90 * 1000;
+
 function pickRefined(map, ep) {
-  return map.get(`${ep.sid}#${ep.from}#${ep.to}`) || map.get(`${ep.sid}#${ep.from}#*`) || null;
+  const hit = map.get(`${ep.sid}#${ep.from}#${ep.to}`) || map.get(`${ep.sid}#${ep.from}#*`);
+  if (hit) return hit;
+  if (ep.startTs == null) return null;
+  let best = null;
+  let bestDiff = Infinity;
+  for (const r of map.values()) {
+    if (r.sid !== ep.sid || r.ts == null) continue;
+    const diff = Math.abs(r.ts - ep.startTs);
+    if (diff < bestDiff) { bestDiff = diff; best = r; }
+  }
+  return bestDiff <= TS_TOLERANCE_MS ? best : null;
 }
 
 /**

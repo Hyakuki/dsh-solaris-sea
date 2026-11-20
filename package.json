@@ -1,6 +1,6 @@
 {
   "name": "dsh-solaris-sea",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "索拉里斯之海：自己的记忆。把会话日志切成片段、写厚索引、存原话指针；能想起来、能取证、能特意记。",
   "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "memory", "recall", "trace"],
   "license": "MIT",

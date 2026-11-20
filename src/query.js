@@ -1,4 +1,4 @@
-/**
+﻿/**
  * query.js — 三个能力的实现（工具层只负责包壳）：
  *
  *   findEpisodes  按线索找片段（关键词 / 日期 / 原话片段）→ 给摘要 + 指针
@@ -18,7 +18,7 @@
  */
 import { listAllSessions, listSessions, readSessionMessages } from './logs.js?v=3';
 import { loadIndex, loadIndexAt, loadTopics, loadTopicsAt, loadManual, listWorkspaces } from './store.js?v=3';
-import { ensureFresh } from './refresh.js?v=5';
+import { ensureFresh } from './refresh.js?v=6';
 
 /** 会话来源：给了 cwd 就只看那个工作区，否则全都要（插件里 cwd 常常是空的）。 */
 function sessionsFor(cwd, env) {
@@ -113,6 +113,9 @@ function looseScore(text, term) {
     if (s.includes(chars[i] + chars[i + 1])) bigrams += 1;
   }
   const biCov = chars.length > 1 ? bigrams / (chars.length - 1) : 1;
+  // 光看覆盖率会放过「字都在、但散在各处」的假命中：搜「做噩梦」，一段里只要有
+  // 「做的」和「梦里」就能凑到 0.6。所以必须至少有一对相邻的双字真的连在一起。
+  if (bigrams === 0) return 0;
   const score = 0.6 * hitChars + 0.4 * biCov;
   return score >= 0.6 ? score : 0;
 }
@@ -181,7 +184,14 @@ export function findEpisodes({ cwd, query, day, limit = 6, session }, env) {
   const allTerms = terms.length ? terms : [];
 
   const score = new Map();
-  const bump = (id, n = 1) => score.set(id, (score.get(id) || 0) + n);
+  // strong 记「真命中」：关键词完全相等、或摘要/要点里字面出现。
+  // 只有「沾边」的段落在下面会被标成弱匹配——不标出来，弱命中就会把
+  // 「没找到」伪装成「找到了」。
+  const strong = new Set();
+  const bump = (id, n = 1, isStrong = false) => {
+    score.set(id, (score.get(id) || 0) + n);
+    if (isStrong) strong.add(id);
+  };
 
   for (const topics of topicsList) {
     for (const [kw, ids] of Object.entries(topics)) {
@@ -190,14 +200,14 @@ export function findEpisodes({ cwd, query, day, limit = 6, session }, env) {
       for (const term of allTerms) {
         if (k.includes(term) || term.includes(k)) {
           const w = k === term ? 2 : 1; // 完全相等比"沾边"更值钱
-          for (const id of ids) bump(id, w);
+          for (const id of ids) bump(id, w, k === term);
         }
       }
     }
   }
   for (const ep of index) {
     const hay = norm([ep.head, ...(ep.points ?? [])].join(''));
-    for (const term of allTerms) if (hay.includes(term)) bump(ep.id, 2);
+    for (const term of allTerms) if (hay.includes(term)) bump(ep.id, 2, true);
   }
 
   const rows = index.filter((ep) => {
@@ -224,12 +234,25 @@ export function findEpisodes({ cwd, query, day, limit = 6, session }, env) {
     const sb = score.get(b.id) ?? 0;
     return sb - sa || b.weight - a.weight || b.startTs - a.startTs;
   });
-  return rows.slice(0, limit).map((ep) => ({
+  const picked = rows.slice(0, limit).map((ep) => ({
     ...ep,
     when: fmtTime(ep.startTs),
     day: dayKey(ep.startTs),
     score: score.get(ep.id) ?? 0,
+    match: strong.has(ep.id) ? 'strong' : 'weak',
   }));
+
+  // 只有「沾边」、一条真命中都没有时，不能就这样交差：
+  // 弱命中会把「没找到」伪装成「找到了」（实测搜「做噩梦」，索引里零行，
+  // 它却递了一条 10-31 的画画插件记录上来）。所以再下原话里捞一遍，
+  // 捞到的算硬命中排前面，剩下的弱命中标着弱一起递，让我一眼看得出哪条靠不住。
+  if (!picked.some((ep) => ep.match === 'strong')) {
+    const raw = rawEpisodes(index, sessionsFor(cwd, env), allTerms, limit, { session, day })
+      .map((ep) => ({ ...ep, match: 'strong' }));
+    const seen = new Set(raw.map((ep) => ep.id));
+    return [...raw, ...picked.filter((ep) => !seen.has(ep.id))].slice(0, limit);
+  }
+  return picked;
 }
 
 /**
